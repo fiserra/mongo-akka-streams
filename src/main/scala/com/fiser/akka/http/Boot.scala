@@ -19,6 +19,7 @@ import reactivemongo.bson.BSONDocument
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
+import scala.language.postfixOps
 
 object Boot extends App {
 
@@ -35,35 +36,35 @@ object Boot extends App {
 
   val serverBinding2: Source[Http.IncomingConnection, Future[Http.ServerBinding]] = Http().bind(interface = "localhost", port = 8090)
 
-  val step1 = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("GOOG"))
-  val step2 = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("AAPL"))
-  val step3 = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("MSFT"))
-
-
+  val step1: Flow[HttpRequest, String, Unit] = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("GOOG"))
+  val step2: Flow[HttpRequest, String, Unit] = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("AAPL"))
+  val step3: Flow[HttpRequest, String, Unit] = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("MSFT"))
   val mapToResponse: Flow[String, HttpResponse, Unit] = Flow[String].map[HttpResponse](
     (inp: String) => HttpResponse(status = StatusCodes.OK, entity = inp)
   )
 
-  val broadCastMergeFlow = Flow[HttpRequest, HttpResponse, Unit]() { implicit builder =>
-    import FlowGraph.Implicits._
+  val broadCastMergeFlow: Flow[HttpRequest, String, Unit] = Flow() {
+    implicit builder =>
+      import FlowGraph.Implicits._
 
-    val broadcast = builder.add(Broadcast[HttpRequest](3))
-    val merge =  builder.add(Merge[String](3))
+      val broadcast = builder.add(Broadcast[HttpRequest](3))
+      val merge = builder.add(Merge[String](3))
 
-           broadcast ~> step1 ~> merge
-           broadcast ~> step2 ~> merge ~> mapToResponse ~ Sink.foreach(identity)
-           broadcast ~> step3 ~> merge
-
+      broadcast ~> step1 ~> merge
+      broadcast ~> step2 ~> merge
+      broadcast ~> step3 ~> merge
       (broadcast.in, merge.out)
   }
-
   serverBinding2.runForeach { connection =>
-    connection.handleWithAsyncHandler(broadCastMergeFlow)
+    connection.handleWith(broadCastMergeFlow.via(mapToResponse))
+  }
+
+  if (true) {
+
   }
 
   def getTickerHandler(tickName: String)(request: HttpRequest): Future[String] = {
     val ticker = Database.findTicker(tickName)
-    Thread.sleep(Math.random() * 1000 toInt)
     for {
       t <- ticker
     } yield {
