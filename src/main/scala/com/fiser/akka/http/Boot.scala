@@ -1,11 +1,3 @@
-/*
- * Copyright 2003-2015 Monitise Group Limited. All Rights Reserved.
- *
- * Save to the extent permitted by law, you may not use, copy, modify,
- * distribute or create derivative works of this material or any part
- * of it without the prior written consent of Monitise Group Limited.
- * Any reproduction of this material must contain this notice.
- */
 package com.fiser.akka.http
 
 import akka.actor.ActorSystem
@@ -29,12 +21,11 @@ object Boot extends App {
   implicit val materializer = ActorMaterializer()
 
   val serverBinding1: Source[Http.IncomingConnection, Future[Http.ServerBinding]] = Http().bind(interface = "localhost", port = 8091)
-
   serverBinding1.runForeach { connection =>
     connection.handleWithAsyncHandler(asyncHandler)
   }
 
-  val serverBinding2: Source[Http.IncomingConnection, Future[Http.ServerBinding]] = Http().bind(interface = "localhost", port = 8090)
+  val serverBinding0: Source[Http.IncomingConnection, Future[Http.ServerBinding]] = Http().bind(interface = "localhost", port = 8090)
 
   val step1: Flow[HttpRequest, String, Unit] = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("GOOG"))
   val step2: Flow[HttpRequest, String, Unit] = Flow[HttpRequest].mapAsync[String](2)(getTickerHandler("AAPL"))
@@ -42,6 +33,28 @@ object Boot extends App {
   val mapToResponse: Flow[String, HttpResponse, Unit] = Flow[String].map[HttpResponse](
     (inp: String) => HttpResponse(status = StatusCodes.OK, entity = inp)
   )
+
+  val broadCastZipFlow = Flow[HttpRequest, HttpResponse]() {
+    implicit builder =>
+      import FlowGraph.Implicits._
+
+            val broadcast = builder.add(Broadcast[HttpRequest](3))
+
+            val zipWith = ZipWith[String, String, String, HttpResponse] (
+              (inp1, inp2, inp3) => new HttpResponse(status = StatusCodes.OK, entity = inp1 + inp2 + inp3))
+            val zip = builder.add(zipWith)
+
+            broadcast ~> step1 ~> zip.in0
+            broadcast ~> step2 ~> zip.in1
+            broadcast ~> step3 ~> zip.in2
+
+      (broadcast.in, zip.out)
+  }
+
+  val serverBinding3: Source[Http.IncomingConnection, Future[Http.ServerBinding]] = Http().bind(interface = "localhost", port = 8093)
+  serverBinding3.runForeach { connection =>
+    connection.handleWith(broadCastZipFlow)
+  }
 
   val broadCastMergeFlow: Flow[HttpRequest, String, Unit] = Flow() {
     implicit builder =>
@@ -55,12 +68,8 @@ object Boot extends App {
       broadcast ~> step3 ~> merge
       (broadcast.in, merge.out)
   }
-  serverBinding2.runForeach { connection =>
+  serverBinding0.runForeach { connection =>
     connection.handleWith(broadCastMergeFlow.via(mapToResponse))
-  }
-
-  if (true) {
-
   }
 
   def getTickerHandler(tickName: String)(request: HttpRequest): Future[String] = {
@@ -74,7 +83,6 @@ object Boot extends App {
       }
     }
   }
-
 
   // With an async handler, we use futures. Threads aren't blocked.
   def asyncHandler(request: HttpRequest): Future[HttpResponse] = {

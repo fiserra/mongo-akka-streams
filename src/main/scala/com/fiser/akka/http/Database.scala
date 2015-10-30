@@ -5,7 +5,6 @@ import reactivemongo.api.collections.bson.BSONCollection
 import reactivemongo.bson.BSONDocument
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
-import scala.concurrent.Future
 
 object Database {
 
